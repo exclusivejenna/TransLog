@@ -1,0 +1,73 @@
+using BCSIT.Models;
+using System;
+using System.Linq;
+using System.Threading.Tasks;
+using BCSIT.Data;
+using Microsoft.EntityFrameworkCore;
+
+public class TransLogService
+{
+    private readonly DataContext _context;
+
+    public TransLogService(DataContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<bool> HandleCustomerLogin(int customerId)
+    {
+        var transaction = await _context.Transactions.FirstOrDefaultAsync(t => t.CustomerId == customerId);
+        if (transaction == null)
+            return false; // Transaction record not found for the customer
+
+        var customerLog = await _context.CustomerLogs
+            .Where(cl => cl.CustomerId == customerId)
+            .OrderByDescending(cl => cl.StartTime)
+            .FirstOrDefaultAsync();
+
+        bool shouldDeduct = true;
+
+        if (customerLog != null)
+        {
+            // Check if the customer logged in within the last hour and has attempted less than three times
+            var timeSinceLastLogin = DateTime.Now - customerLog.StartTime;
+            if (timeSinceLastLogin.TotalHours < 1 && customerLog.AttemptCount < 3)
+            {
+                shouldDeduct = false;
+                customerLog.AttemptCount += 1;
+            }
+            else if (timeSinceLastLogin.TotalHours >= 1)
+            {
+                customerLog.AttemptCount = 1; // Reset the attempt count after one hour
+                customerLog.StartTime = DateTime.Now;
+            }
+        }
+        else
+        {
+            // Create a new log if no prior record exists
+            customerLog = new CustomerLog
+            {
+                CustomerId = customerId,
+                StartTime = DateTime.Now,
+                AttemptCount = 1
+            };
+            _context.CustomerLogs.Add(customerLog);
+        }
+
+        if (shouldDeduct)
+        {
+            // Deduct amount from the transaction balance
+            if (transaction.Balance >= 1000)
+            {
+                transaction.Balance -= 1000;
+            }
+            else
+            {
+                throw new Exception("Insufficient Balance");
+            }
+        }
+
+        await _context.SaveChangesAsync();
+        return true;        
+    }
+}
